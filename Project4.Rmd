@@ -1,0 +1,142 @@
+---
+title: "Project 4 - Document Classification"
+author: "Md Asadul Islam"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Project Overview
+It can be useful to be able to classify new "test" documents using already classified "training" documents.  A common example is using a corpus of labeled spam and ham (non-spam) e-mails to predict whether or not a new document is spam.  
+
+For this project, you can start with a spam/ham dataset, then predict the class of new documents (either withheld from the training dataset or from another source such as your own spam folder).   One example corpus:   https://spamassassin.apache.org/old/publiccorpus/
+
+## Loading Data
+
+```{r code to load the data}
+
+download.file(url = "http://spamassassin.apache.org/old/publiccorpus/20021010_easy_ham.tar.bz2", destfile = "20021010_easy_ham.tar.bz2")
+
+untar("20021010_easy_ham.tar.bz2", exdir="C:\\Documents\\R Projects")
+
+download.file(url = "http://spamassassin.apache.org/old/publiccorpus/20050311_spam_2.tar.bz2", destfile = "20050311_spam_2.tar.bz2")
+
+untar("20050311_spam_2.tar.bz2", exdir="C:\\Documents\\R Projects")
+```
+
+## Creating Dataset and Tidying the Data
+
+First, the files from the spam and ham folders are read. Then, the text in each email is read and transformed to the data frame, each row contains email text, with an additional column “tag” where the mark of if the email is spam or ham is placed. There are 2551 ham and 1397 spam messages.
+
+```{r code chunk for creating dataset and tidying data}
+library(readr)
+spam_folder = "C:\\Documents\\R Projects\\spam_2"
+ham_folder = "C:\\Documents\\R Projects\\easy_ham"
+
+to_df <- function(path, tag){
+  files <- list.files(path=path, 
+                      full.names=TRUE, 
+                      recursive=TRUE)
+  email <- lapply(files, function(x) {
+    body <- read_file(x)
+    })
+  email <- unlist(email)
+  data <- as.data.frame(email)
+  data$tag <- tag
+  return (data)
+}
+
+ham_df <- to_df(ham_folder, tag="ham") 
+spam_df <- to_df(spam_folder, tag="spam")
+df <- rbind(ham_df, spam_df)
+table(df$tag)
+```
+## Remove Unnecessary HTML Characters
+
+```{r code for removing unneccessary HTML characters}
+library(dplyr)
+library(stringr)
+library(tidytext)
+
+df<-df %>%
+  mutate(email = str_remove_all(email, pattern = "<.*?>")) %>%
+  mutate(email = str_remove_all(email, pattern = "[:digit:]")) %>%
+  mutate(email = str_remove_all(email, pattern = "[:punct:]")) %>%
+  mutate(email = str_remove_all(email, pattern = "[\n]")) %>%
+  mutate(email = str_to_lower(email)) %>%
+  unnest_tokens(output=text,input=email,
+                token="paragraphs",
+                format="text") %>%
+  anti_join(stop_words, by=c("text"="word"))
+
+```
+
+## Corpus, Document Term Matrix
+
+The spam and ham emails in the data frame needs to be shuffled. The transform the words we have in the data set into a corpus of messages using function tm_map. Using the same function,numbers, white space, etc are removed. Using functions DocumentTermMatrix() I contract document Term Matrix from our data frame, and remove sparse terms with removeSparseTerms(). After, I convert it back to the data frame and mark emails with 0 and 1 for ham and spam.
+
+
+```{r code for document term matrix}
+library(tm)
+
+set.seed(7614)
+shuffled <- sample(nrow(df))
+df<-df[shuffled,]
+df$tag <- as.factor(df$tag)
+
+v_corp <- VCorpus(VectorSource(df$text))
+v_corp <- tm_map(v_corp, content_transformer(stringi::stri_trans_tolower))
+v_corp <- tm_map(v_corp, removeNumbers)
+v_corp <- tm_map(v_corp, removePunctuation)
+v_corp <- tm_map(v_corp, stripWhitespace)
+v_corp <- tm_map(v_corp, removeWords, stopwords("english"))
+v_corp <- tm_map(v_corp, stemDocument)
+
+dtm <- DocumentTermMatrix(v_corp, control =
+                                 list(stemming = TRUE))
+dtm <- removeSparseTerms(dtm, 0.999)
+
+convert_count <- function(x) {
+  y <- ifelse(x > 0, 1,0)
+  y <- factor(y, levels=c(0,1), labels=c(0,1))
+  y
+}
+
+tmp <- apply(dtm, 2, convert_count)
+
+df_matrix = as.data.frame(as.matrix(tmp))
+
+df_matrix$class = df_matrix$class
+str(df_matrix$class)
+
+```
+## Prediction
+
+The training data frame will take 0.7 of the data, 0.3 data we will be left for testing. CreateDataPartition() function is used to create series of test/training partitions.
+
+The randomForest classifier with 400 trees is tried in doing the prediction. It implements Breiman’s random forest algorithm for classification and regression. Random forest averages multiple deep decision trees, trains on different parts of the same training set, and help with overcoming over-fitting problem of individual decision tree.
+The model shows 99.7% accuracy for the test data frame.
+
+```{r code for prediction model}
+library(caret)
+library(randomForest)
+
+set.seed(7316)  
+prediction <- createDataPartition(df_matrix$class, p=.7, list = FALSE, times = 1)
+head(prediction)
+
+training <- df[prediction,]
+testing <- df[-prediction,]
+
+classifier <-  randomForest(x = training, y = training$tag, ntree = 400) 
+predicted <-  predict(classifier, newdata = testing)
+
+confusionMatrix(table(predicted,testing$tag))
+```
+
+## Conclusion
+
+The project above helped to learn how to work with the tar archives, how to read the text from the email and transform it to the data frame, and, the main thing, how to use this data frame to train the model for predicting spam. The work with corpus was a great challenge and took most of the time. 70% of the data was used to train the data, 30% to test. The Random Forest was used as a classifier for the model, it helped to achieve 99% accuracy. The project has used random forest in classification but there are other methods such as naive bayes. 
